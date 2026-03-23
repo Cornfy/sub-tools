@@ -1,0 +1,27 @@
+# --- 编译产物 (Makefile 生成) ---
+bin/
+builds/
+sub-tool*
+*.exe
+*.dll
+*.so
+*.dylib
+
+# --- Go 相关 ---
+vendor/
+*.test
+*.out
+
+# --- 转换生成的配置文件 (防止泄露隐私) ---
+template.json
+config.json
+test.json
+*.local.json
+
+# --- 操作系统与编辑器 ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

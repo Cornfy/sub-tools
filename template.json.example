@@ -1,0 +1,502 @@
+{
+  "_extra": {
+    "sub_url": "http://your-provider.com/api/v1/client/subscribe?token=...",
+    "filter_keywords": "重置|剩余|到期|官网|提示|域名|流量|群组",
+    "regions": [
+      ["美国|US|United States|🇺🇸", "🇺🇸 美国"],
+      ["新加坡|SG|Singapore|🇸🇬", "🇸🇬 新加坡"],
+      ["日本|JP|Japan|🇯🇵", "🇯🇵 日本"],
+      ["香港|HK|Hong Kong|🇭🇰", "🇭🇰 香港"],
+      ["台湾|TW|Taiwan|🇹🇼", "🇹🇼 台湾"]
+    ]
+  },
+  "log": {
+    "disabled": false,
+    "level": "info"
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090",
+      "external_ui": "webui",
+      "external_ui_download_url": "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip",
+      "external_ui_download_detour": "⚙️ 默认",
+      "secret": "YOU_SHOULD_SET_A_STRONG_PASSWORD",
+      "default_mode": "rule"
+    },
+    "cache_file": {
+      "enabled": true,
+      "path": "cache.db",
+      "store_fakeip": true
+    }
+  },
+  "dns": {
+    "servers": [
+      {
+        "tag": "Local-DNS",
+        "type": "https",
+        "domain_resolver": "Local-DNS-Resolver",
+        "server_port": 443,
+        "server": "223.5.5.5",
+        "path": "/dns-query"
+      },
+      {
+        "tag": "Local-DNS-Resolver",
+        "type": "udp",
+        "server_port": 53,
+        "server": "223.5.5.5"
+      },
+      {
+        "tag": "Remote-DNS",
+        "type": "https",
+        "detour": "⚙️ 默认",
+        "domain_resolver": "Remote-DNS-Resolver",
+        "server_port": 443,
+        "server": "1.1.1.1",
+        "path": "/dns-query"
+      },
+      {
+        "tag": "Remote-DNS-Resolver",
+        "type": "udp",
+        "detour": "⚙️ 默认",
+        "server_port": 53,
+        "server": "1.1.1.1"
+      },
+      {
+        "tag": "Tailscale-EP",
+        "type": "tailscale",
+        "endpoint": "🔐 tailnet",
+        "accept_default_resolvers": false
+      },
+      {
+        "tag": "Magic-Hosts",
+        "type": "hosts",
+        "predefined": {
+          "example_domain1": "x.x.x.x",
+          "example_domain2": "x.x.x.x"
+        }
+      },
+      {
+        "tag": "FakeIP-DNS",
+        "type": "fakeip",
+        "inet4_range": "198.18.0.0/15",
+        "inet6_range": "fc00::/18"
+      }
+    ],
+    "rules": [
+      {
+        "domain": [
+          "example_domain1",
+          "example_domain2"
+        ],
+        "server": "Magic-Hosts"
+      },
+      {
+        "ip_cidr": [
+          "100.64.0.0/10",
+          "fd7a:115c:a1e0::/48"
+        ],
+        "domain_suffix": ["ts.net"],
+        "server": "Tailscale-EP"
+      },
+      {
+        "action": "predefined",
+        "rule_set": ["Ad-Block"],
+        "rcode": "NOERROR"
+      },
+      {
+        "clash_mode": "direct",
+        "server": "Local-DNS"
+      },
+      {
+        "clash_mode": "global",
+        "server": "Remote-DNS"
+      },
+      {
+        "rule_set": ["GeoSite-GeoLocation-!CN"],
+        "server": "Remote-DNS"
+      },
+      {
+        "rule_set": ["GeoSite-CN"],
+        "server": "Local-DNS"
+      }
+    ],
+    "final": "Remote-DNS",
+    "strategy": "prefer_ipv4"
+  },
+  "endpoints": [
+    {
+      "tag": "🔐 tailnet",
+      "type": "tailscale",
+      "hostname": "",
+      "accept_routes": true,
+      "exit_node": "",
+      "exit_node_allow_lan_access": true,
+      "advertise_routes": [],
+      "advertise_exit_node": false
+    }
+  ],
+  "inbounds": [
+    {
+      "tag": "ssh-in",
+      "type": "direct",
+      "listen": "0.0.0.0",
+      "listen_port": 7743
+    },
+    {
+      "tag": "tun-in",
+      "type": "tun",
+      "interface_name": "",
+      "address": ["10.0.0.1/30"],
+      "mtu": 1500,
+      "auto_route": true,
+      "auto_redirect": true,
+      "strict_route": true,
+      "endpoint_independent_nat": false,
+      "stack": "mixed"
+    }
+  ],
+   "outbounds": [
+    { "type": "direct", "tag": "🎯 直连" },
+    {
+      "type": "selector",
+      "tag": "⚙️ 默认",
+      "interrupt_exist_connections": true,
+      "outbounds": ["♻️ 低延迟", "🎯 直连", "<all-region-groups>", "<all-proxies>"]
+    },
+    {
+      "type": "selector",
+      "tag": "🎮 游戏-!CN",
+      "interrupt_exist_connections": true,
+      "outbounds": ["⚙️ 默认", "♻️ 低延迟", "🎯 直连", "<all-region-groups>", "<all-proxies>"]
+    },
+    {
+      "type": "selector",
+      "tag": "🤖 AI-!CN",
+      "interrupt_exist_connections": true,
+      "outbounds": ["⚙️ 默认", "♻️ 低延迟", "🎯 直连", "<all-region-groups>", "<all-proxies>"]
+    },
+    {
+      "type": "selector",
+      "tag": "✈️ Telegram",
+      "interrupt_exist_connections": true,
+      "outbounds": ["⚙️ 默认", "♻️ 低延迟", "🎯 直连", "<all-region-groups>", "<all-proxies>"]
+    },
+    {
+      "type": "selector",
+      "tag": "🔎 Google",
+      "interrupt_exist_connections": true,
+      "outbounds": ["⚙️ 默认", "♻️ 低延迟", "🎯 直连", "<all-region-groups>", "<all-proxies>"]
+    },
+    {
+      "type": "selector",
+      "tag": "🍎 Apple",
+      "interrupt_exist_connections": true,
+      "outbounds": ["⚙️ 默认", "♻️ 低延迟", "🎯 直连", "<all-region-groups>", "<all-proxies>"]
+    },
+    {
+      "type": "selector",
+      "tag": "Ⓜ️ Microsoft & GitHub",
+      "interrupt_exist_connections": true,
+      "outbounds": ["⚙️ 默认", "♻️ 低延迟", "🎯 直连", "<all-region-groups>", "<all-proxies>"]
+    },
+    {
+      "type": "selector",
+      "tag": "🐦 Twitter",
+      "interrupt_exist_connections": true,
+      "outbounds": ["⚙️ 默认", "♻️ 低延迟", "🎯 直连", "<all-region-groups>", "<all-proxies>"]
+    },
+    {
+      "type": "selector",
+      "tag": "🎨 Pixiv",
+      "interrupt_exist_connections": true,
+      "outbounds": ["⚙️ 默认", "♻️ 低延迟", "🎯 直连", "<all-region-groups>", "<all-proxies>"]
+    },
+    {
+      "type": "selector",
+      "tag": "⚓ 兜底",
+      "outbounds": ["⚙️ 默认", "🎯 直连"]
+    },
+    {
+      "type": "urltest",
+      "tag": "♻️ 低延迟",
+      "url": "https://www.gstatic.com/generate_204",
+      "interrupt_exist_connections": true,
+      "interval": "3m",
+      "tolerance": "150",
+      "outbounds": ["<all-proxies>"]
+    },
+    "<dynamic-region-groups>"
+  ], 
+  "route": {
+    "rule_set": [
+      {
+        "tag": "GeoIP-Private",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/private.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "GeoSite-Private",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/private.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "GeoIP-CN",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/cn.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "GeoSite-CN",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/cn.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "GeoSite-GeoLocation-!CN",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/geolocation-!cn.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "Ad-Block",
+        "type": "remote",
+        "url": "https://gcore.jsdelivr.net/gh/217heidai/adblockfilters@main/rules/adblocksingbox.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "GeoSite-Category-Games-CN",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/category-games-cn.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "GeoSite-Category-Games-!CN",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/category-games-!cn.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "GeoSite-Category-AI-!CN",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/category-ai-!cn.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "GeoSite-Telegram",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/telegram.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "GeoIP-Telegram",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/telegram.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "GeoSite-Google",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/google.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "GeoIP-Google",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/google.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "GeoSite-Apple",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/apple.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "GeoSite-Microsoft",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/microsoft.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "GeoSite-Twitter",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/twitter.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "GeoSite-Pixiv",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/pixiv.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      }
+    ],
+    "rules": [
+      {
+        "action": "bypass",
+        "ip_cidr":[
+          "127.0.0.1/32",
+          "::1/128",
+          "192.168.0.0/16",
+          "fe80::/10"
+        ]
+      },
+      {
+        "action": "sniff",
+        "inbound": "tun-in"
+      },
+      {
+        "action": "hijack-dns",
+        "protocol": "dns"
+      },
+      {
+        "inbound": ["ssh-in"],
+        "source_ip_cidr": [
+          "192.168.2.0/24",
+          "10.0.0.0/8"
+        ],
+        "port": [7743],
+        "outbound": "🎯 直连",
+        "override_address": "127.0.0.1",
+        "override_port": 22
+      },
+      {
+        "action": "reject",
+        "inbound": ["ssh-in"]
+      },
+      {
+        "ip_cidr": [
+          "100.64.0.0/10",
+          "fd7a:115c:a1e0::/48"
+        ],
+        "domain_suffix": ["ts.net"],
+        "outbound": "🔐 tailnet"
+      },
+      {
+        "clash_mode": "direct",
+        "outbound": "🎯 直连"
+      },
+      {
+        "clash_mode": "global",
+        "outbound": "⚙️ 默认"
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "🎯 直连"
+      },
+      {
+        "rule_set": [
+          "GeoSite-Private",
+          "GeoIP-Private"
+        ],
+        "outbound": "🎯 直连"
+      },
+      {
+        "network": "icmp",
+        "outbound": "🎯 直连"
+      },
+      {
+        "protocol": ["bittorrent", "ssh"],
+        "outbound": "🎯 直连"
+      },
+      {
+        "action": "reject",
+        "rule_set": ["Ad-Block"]
+      },
+      {
+        "rule_set": ["GeoSite-Category-Games-CN"],
+        "outbound": "🎯 直连"
+      },
+      {
+        "rule_set": ["GeoSite-Category-Games-!CN"],
+        "outbound": "🎮 游戏-!CN"
+      },
+      {
+        "rule_set": ["GeoSite-Category-AI-!CN"],
+        "outbound": "🤖 AI-!CN"
+      },
+      {
+        "rule_set": [
+          "GeoSite-Telegram",
+          "GeoIP-Telegram"
+        ],
+        "outbound": "✈️ Telegram"
+      },
+      {
+        "rule_set": [
+          "GeoSite-Google",
+          "GeoIP-Google"
+        ],
+        "outbound": "🔎 Google"
+      },
+      {
+        "rule_set": ["GeoSite-Apple"],
+        "outbound": "🍎 Apple"
+      },
+      {
+        "rule_set": ["GeoSite-Microsoft"],
+        "outbound": "Ⓜ️ Microsoft & GitHub"
+      },
+      {
+        "rule_set": ["GeoSite-Twitter"],
+        "outbound": "🐦 Twitter"
+      },
+      {
+        "rule_set": ["GeoSite-Pixiv"],
+        "outbound": "🎨 Pixiv"
+      },
+      {
+        "rule_set": ["GeoSite-GeoLocation-!CN"],
+        "outbound": "⚙️ 默认"
+      },
+      {
+        "rule_set": [
+          "GeoSite-CN",
+          "GeoIP-CN"
+        ],
+        "outbound": "🎯 直连"
+      }
+    ],
+    "auto_detect_interface": true,
+    "find_process": true,
+    "final": "⚓ 兜底",
+    "default_domain_resolver": {
+      "server": "Local-DNS"
+    }
+  }
+}
