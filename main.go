@@ -1,24 +1,41 @@
 package main
 
 import (
-	"encoding/base64"
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
+
+	"sub-tool/converter"
+
+	"github.com/iancoleman/orderedmap"
 )
 
-// version 将在编译时通过链接器（linker）进行设置。
-// 它的默认值 "development" 会在直接使用 `go run` 时显示。
 var version = "development"
 
-// --- 核心结构体定义 ---
+type urlSlice []string
+func (s *urlSlice) String() string { return strings.Join(*s, ", ") }
+func (s *urlSlice) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
+
+type singleString struct {
+	value string
+	isSet bool
+}
+func (s *singleString) String() string { return s.value }
+func (s *singleString) Set(v string) error {
+	if s.isSet { return fmt.Errorf("只能指定一个模板文件") }
+	s.value = v
+	s.isSet = true
+	return nil
+}
 
 type ExtraConfig struct {
 	SubURL         string     `json:"sub_url"`
@@ -26,354 +43,250 @@ type ExtraConfig struct {
 	Regions        [][]string `json:"regions"`
 }
 
-type SingBoxConfig struct {
-	Extra        *ExtraConfig    `json:"_extra,omitempty"`
-	Log          json.RawMessage `json:"log,omitempty"`
-	Experimental json.RawMessage `json:"experimental,omitempty"`
-	DNS          json.RawMessage `json:"dns,omitempty"`
-	Endpoints    json.RawMessage `json:"endpoints,omitempty"`
-	Inbounds     json.RawMessage `json:"inbounds,omitempty"`
-	Outbounds    []interface{}   `json:"outbounds,omitempty"`
-	Route        json.RawMessage `json:"route,omitempty"`
-}
-
-type SingBoxOutbound struct {
-	Type                      string           `json:"type"`
-	Tag                       string           `json:"tag"`
-	Server                    string           `json:"server,omitempty"`
-	ServerPort                int              `json:"server_port,omitempty"`
-	Method                    string           `json:"method,omitempty"`
-	Password                  string           `json:"password,omitempty"`
-	UUID                      string           `json:"uuid,omitempty"`
-	Security                  string           `json:"security,omitempty"`
-	TLS                       *TLSConfig       `json:"tls,omitempty"`
-	Transport                 *TransportConfig `json:"transport,omitempty"`
-	URL                       string           `json:"url,omitempty"`
-	Interval                  string           `json:"interval,omitempty"`
-	Tolerance                 int              `json:"tolerance,omitempty"`
-	InterruptExistConnections bool             `json:"interrupt_exist_connections,omitempty"`
-	Outbounds                 []string         `json:"outbounds,omitempty"`
-}
-
-type TLSConfig struct {
-	Enabled    bool        `json:"enabled"`
-	ServerName string      `json:"server_name,omitempty"`
-	Insecure   bool        `json:"insecure"`
-	UTLS       *UTLSConfig `json:"utls,omitempty"`
-}
-type UTLSConfig struct {
-	Enabled     bool   `json:"enabled"`
-	Fingerprint string `json:"fingerprint"`
-}
-type TransportConfig struct {
-	Type string `json:"type"`
-	Path string `json:"path,omitempty"`
-}
-type VMessJSON struct {
-	Add  string      `json:"add"`
-	Port interface{} `json:"port"`
-	Id   string      `json:"id"`
-	Net  string      `json:"net"`
-	Path string      `json:"path"`
-	Tls  string      `json:"tls"`
-	Sni  string      `json:"sni"`
-	Ps   string      `json:"ps"`
-}
-
 func main() {
-	// 1. 定义并解析参数
+	var urls urlSlice
+	flag.Var(&urls, "url", "订阅源 (可多次指定)")
+	var tmpl singleString
+	flag.Var(&tmpl, "template", "转换模板")
+	nodeOut := flag.String("node-gen", "SKIP", "输出纯节点 JSON 路径")
+	configOut := flag.String("config-gen", "SKIP", "输出完整配置路径")
 	showVersion := flag.Bool("version", false, "显示版本号")
 	flag.BoolVar(showVersion, "v", false, "显示版本号 (简写)")
-	subURL := flag.String("url", "", "订阅链接 (若不提供则尝试读取模板中的 sub_url)")
-	templatePath := flag.String("template", "template.json", "模板文件路径")
-	outputPath := flag.String("output", "config.json", "输出文件路径")
 
-	// 自定义帮助信息 (Flag Usage)
 	flag.Usage = func() {
-		// ANSI 颜色代码
-		bold := "\033[1m"
-		cyan := "\033[36m"
-		yellow := "\033[33m"
-		reset := "\033[0m"
-
-		fmt.Fprintf(os.Stderr, "%s%sSUB-TOOL - Sing-box 订阅转换工具 (%s)%s\n\n", bold, cyan, version, reset)
-		
+		bold, cyan, yellow, reset := "\033[1m", "\033[36m", "\033[33m", "\033[0m"
+		fmt.Fprintf(os.Stderr, "%s%s🚀 SUB-TOOL - Sing-box 订阅转换工具 (%s)%s\n\n", bold, cyan, version, reset)
 		fmt.Fprintf(os.Stderr, "%s用法:%s\n  %s [参数]\n\n", yellow, reset, os.Args[0])
-		
 		fmt.Fprintf(os.Stderr, "%s参数列表:%s\n", yellow, reset)
 		flag.VisitAll(func(f *flag.Flag) {
-			// 将简写和全称合并显示（如果有的话）
-			name := "-" + f.Name
-			fmt.Fprintf(os.Stderr, "  %s%-15s%s %s (默认值: %q)\n", cyan, name, reset, f.Usage, f.DefValue)
+			fmt.Fprintf(os.Stderr, "  %s-%-15s%s %s\n", cyan, f.Name, reset, f.Usage)
 		})
-
-		fmt.Fprintf(os.Stderr, "\n%s模板占位符说明:%s\n", yellow, reset)
-		fmt.Fprintf(os.Stderr, "  %s%-22s%s 展开为所有物理节点标签\n", cyan, "<all-proxies>", reset)
-		fmt.Fprintf(os.Stderr, "  %s%-22s%s 展开为所有地区分组标签\n", cyan, "<all-region-groups>", reset)
-		fmt.Fprintf(os.Stderr, "  %s%-22s%s 插入动态生成的地区 urltest 组\n", cyan, "<dynamic-region-groups>", reset)
-
-		fmt.Fprintf(os.Stderr, "\n%s示例:%s\n", yellow, reset)
-		fmt.Fprintf(os.Stderr, "  从模板获取 URL:   %s%s -template template.json%s\n", cyan, os.Args[0], reset)
-		fmt.Fprintf(os.Stderr, "  手动指定订阅:     %s%s -url \"http://...\" -output config.json%s\n", cyan, os.Args[0], reset)
-		fmt.Fprintf(os.Stderr, "  查看工具版本:     %s%s -v%s\n\n", cyan, os.Args[0], reset)
 	}
-
 	flag.Parse()
-
-	if flag.NArg() > 0 {
-		fmt.Fprintf(os.Stderr, "错误: 发现了非法参数: %v\n", flag.Args())
-		flag.Usage()
-		os.Exit(1)
-	}
 
 	if *showVersion {
 		fmt.Printf("Sub-Tool Version: %s\n", version)
 		return
 	}
 
-	if _, err := os.Stat(*templatePath); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "错误: 模板文件 %q 不存在。\n", *templatePath)
+	hasNodeAction := isFlagPassed("node-gen")
+	hasConfigAction := isFlagPassed("config-gen")
+	if !hasNodeAction && !hasConfigAction {
+		if len(urls) > 0 || tmpl.isSet {
+			if tmpl.isSet { hasConfigAction = true; *configOut = "-" } else { hasNodeAction = true; *nodeOut = "-" }
+			fmt.Fprintln(os.Stderr, "💡 提示: 未指定输出动作，默认开启 Stdout 输出模式")
+		} else { flag.Usage(); return }
+	}
+
+	var oConf *orderedmap.OrderedMap
+	var extra ExtraConfig
+	effectiveTmpl := tmpl.value
+
+	if hasConfigAction {
+		if effectiveTmpl == "" {
+			if _, err := os.Stat("template.json"); err == nil {
+				effectiveTmpl = "template.json"
+				fmt.Fprintln(os.Stderr, "⚠️  自动回退至 template.json")
+			} else {
+				fmt.Fprintln(os.Stderr, "❌ 错误: 生成配置必须提供模板文件。")
+				os.Exit(1)
+			}
+		}
+		oConf = loadTemplate(effectiveTmpl)
+		extra = getExtra(oConf)
+	} else if hasNodeAction {
+		if _, err := os.Stat("template.json"); err == nil && effectiveTmpl == "" {
+			fmt.Fprintln(os.Stderr, "ℹ️  已加载 template.json 中的过滤规则")
+			extra = getExtra(loadTemplate("template.json"))
+		}
+	}
+
+	var finalURLList []string
+	if len(urls) > 0 { finalURLList = urls } else if extra.SubURL != "" { finalURLList = []string{extra.SubURL} }
+
+	if len(finalURLList) == 0 {
+		fmt.Fprintln(os.Stderr, "❌ 错误: 没有任何订阅源。")
 		os.Exit(1)
 	}
 
-	// 2. 读取并解析模板
-	tmplData, _ := os.ReadFile(*templatePath)
-	var config SingBoxConfig
-	if err := json.Unmarshal(tmplData, &config); err != nil {
-		fmt.Printf("解析模板失败: %v\n", err)
-		return
+	allNodes := collectWithStats(finalURLList, extra)
+
+	if len(allNodes) == 0 {
+		fmt.Fprintln(os.Stderr, "❌ 错误: 未能在提供的源中找到任何有效节点，操作终止。")
+		os.Exit(1)
 	}
 
-	// 3. 确定并获取节点
-	finalURL := *subURL
-	if finalURL == "" && config.Extra != nil {
-		finalURL = config.Extra.SubURL
-	}
-	if finalURL == "" {
-		fmt.Println("错误: 未提供订阅链接。")
-		return
-	}
-	rawNodes := fetchAndParseNodes(finalURL)
-
-	// 4. 确定保底 Tag
-	defaultTag := "direct"
-	if len(config.Outbounds) > 0 {
-		if first, ok := config.Outbounds[0].(map[string]interface{}); ok {
-			if t, ok := first["tag"].(string); ok {
-				defaultTag = t
-			}
-		}
+	if hasNodeAction {
+		fmt.Fprintln(os.Stderr, "📝 正在生成节点列表...")
+		data, _ := json.MarshalIndent(allNodes, "", "  ")
+		writeToTarget(fixGoJsonStyle(string(data)), *nodeOut, "节点列表")
 	}
 
-	// 5. 过滤物理节点并生成 allProxyTags
-	var nodes []SingBoxOutbound
-	if config.Extra != nil && config.Extra.FilterKeywords != "" {
-		filterReg := regexp.MustCompile("(?i)" + config.Extra.FilterKeywords)
-		for _, n := range rawNodes {
-			if !filterReg.MatchString(n.Tag) {
-				nodes = append(nodes, n)
-			}
-		}
-	} else {
-		nodes = rawNodes
+	if hasConfigAction {
+		fmt.Fprintln(os.Stderr, "⚙️  正在执行注入...")
+		finalConf := injectToTemplate(oConf, extra, allNodes)
+		var buf bytes.Buffer
+		encoder := json.NewEncoder(&buf)
+		encoder.SetEscapeHTML(false)
+		encoder.SetIndent("", "  ")
+		encoder.Encode(finalConf)
+		writeToTarget(fixGoJsonStyle(buf.String()), *configOut, "完整配置")
+	}
+}
+
+func collectWithStats(urls []string, extra ExtraConfig) []converter.SingBoxOutbound {
+	results := []converter.SingBoxOutbound{}
+	seen := make(map[string]bool)
+	totalF, totalFilt, totalD := 0, 0, 0
+	var filterReg *regexp.Regexp
+	if extra.FilterKeywords != "" {
+		filterReg = regexp.MustCompile("(?i)" + extra.FilterKeywords)
 	}
 
-	var allProxyTags []string
-	for _, n := range nodes {
-		allProxyTags = append(allProxyTags, n.Tag)
-	}
-	if len(allProxyTags) == 0 {
-		allProxyTags = []string{defaultTag}
-	}
-
-	// 6. 生成地区组 (regionGroups)
-	var regionGroups []SingBoxOutbound
-	var allRegionGroupTags []string
-	if config.Extra != nil && len(config.Extra.Regions) > 0 {
-		for _, conf := range config.Extra.Regions {
-			if len(conf) < 2 { continue }
-			reg := regexp.MustCompile("(?i)" + conf[0])
-			var matchedTags []string
-			for _, tag := range allProxyTags {
-				if tag != defaultTag && reg.MatchString(tag) {
-					matchedTags = append(matchedTags, tag)
-				}
-			}
-			if len(matchedTags) == 0 { continue }
-
-			tag := conf[1]
-			regionGroups = append(regionGroups, SingBoxOutbound{
-				Type:                      "urltest",
-				Tag:                       tag,
-				URL:                       "https://www.gstatic.com/generate_204",
-				Interval:                  "3m",
-				Tolerance:                 150,
-				InterruptExistConnections: true,
-				Outbounds:                 matchedTags,
-			})
-			allRegionGroupTags = append(allRegionGroupTags, tag)
-		}
-	}
-	if len(allRegionGroupTags) == 0 {
-		allRegionGroupTags = []string{defaultTag}
-	}
-
-	// 7. 替换占位符并统一顺序
-	var finalOutbounds []interface{}
-	for _, out := range config.Outbounds {
-		// 处理字符串占位符
-		if str, ok := out.(string); ok && str == "<dynamic-region-groups>" {
-			for _, rg := range regionGroups {
-				finalOutbounds = append(finalOutbounds, rg)
-			}
+	for i, u := range urls {
+		u = strings.TrimSpace(u)
+		if u == "" || u == "--" { continue }
+		fmt.Fprintf(os.Stderr, "🌐 [%d/%d] 正在抓取: %s\n", i+1, len(urls), u)
+		raw := fetchSubscription(u)
+		if raw == "" {
+			fmt.Fprintln(os.Stderr, "   ⚠️  抓取失败：内容为空")
 			continue
 		}
+		decoded, err := converter.RobustBase64Decode(raw)
+		if err != nil { decoded = raw }
 
-		// 处理对象（Selector/URLTest）
-		if objMap, ok := out.(map[string]interface{}); ok {
-			// 利用 Marshal/Unmarshal 固定顺序
-			objBytes, _ := json.Marshal(objMap)
-			var node SingBoxOutbound
-			json.Unmarshal(objBytes, &node)
-
-			if len(node.Outbounds) > 0 {
-				var newSubOuts []string
-				for _, so := range node.Outbounds {
-					switch so {
-					case "<all-proxies>":
-						newSubOuts = append(newSubOuts, allProxyTags...)
-					case "<all-region-groups>":
-						newSubOuts = append(newSubOuts, allRegionGroupTags...)
-					default:
-						newSubOuts = append(newSubOuts, so)
-					}
-				}
-				node.Outbounds = newSubOuts
+		count := 0
+		for _, line := range strings.Split(decoded, "\n") {
+			node, err := converter.ParseNode(strings.TrimSpace(line))
+			if err == nil && node != nil {
+				totalF++
+				if filterReg != nil && filterReg.MatchString(node.Tag) { totalFilt++ ; continue }
+				fp := fmt.Sprintf("%s:%d:%s", node.Server, node.ServerPort, node.Tag)
+				if seen[fp] { totalD++ ; continue }
+				results = append(results, *node)
+				seen[fp] = true
+				count++
 			}
-			finalOutbounds = append(finalOutbounds, node)
+		}
+		fmt.Fprintf(os.Stderr, "   ✅ 解析成功: %d 个有效节点\n", count)
+	}
+	fmt.Fprintf(os.Stderr, "📊 汇总: 发现 %d | 过滤 %d | 去重 %d | 最终保留 %d\n", 
+		totalF, totalFilt, totalD, len(results))
+	return results
+}
+
+func injectToTemplate(oConf *orderedmap.OrderedMap, extra ExtraConfig, nodes []converter.SingBoxOutbound) *orderedmap.OrderedMap {
+	var allProxyTags []string
+	for _, n := range nodes { allProxyTags = append(allProxyTags, n.Tag) }
+
+	var regionGroupOutbounds []converter.SingBoxOutbound
+	var allRegionGroupTags []string
+	for _, regConf := range extra.Regions {
+		if len(regConf) < 2 { continue }
+		reg, _ := regexp.Compile("(?i)" + regConf[0])
+		var matched []string
+		for _, t := range allProxyTags {
+			if reg.MatchString(t) { matched = append(matched, t) }
+		}
+		if len(matched) > 0 {
+			group := converter.SingBoxOutbound{
+				Type: "urltest", Tag: regConf[1], Outbounds: matched,
+				URL: "https://www.gstatic.com/generate_204", Interval: "3m", Tolerance: 150,
+			}
+			regionGroupOutbounds = append(regionGroupOutbounds, group)
+			allRegionGroupTags = append(allRegionGroupTags, group.Tag)
 		}
 	}
 
-	// 8. 追加物理节点
-	for _, n := range nodes {
-		finalOutbounds = append(finalOutbounds, n)
+	if rawOuts, exists := oConf.Get("outbounds"); exists {
+		outList := rawOuts.([]interface{})
+		var finalOutbounds []interface{}
+		for _, item := range outList {
+			if str, ok := item.(string); ok {
+				if str == "<dynamic-region-groups>" {
+					for _, rg := range regionGroupOutbounds { finalOutbounds = append(finalOutbounds, rg) }
+				} else { finalOutbounds = append(finalOutbounds, str) }
+				continue
+			}
+			if obj, ok := item.(orderedmap.OrderedMap); ok {
+				if rawSub, exists := obj.Get("outbounds"); exists {
+					subSlice := rawSub.([]interface{})
+					var newSub []string
+					for _, s := range subSlice {
+						sStr, _ := s.(string)
+						switch sStr {
+						case "<all-proxies>": newSub = append(newSub, allProxyTags...)
+						case "<all-region-groups>": newSub = append(newSub, allRegionGroupTags...)
+						default: newSub = append(newSub, sStr)
+						}
+					}
+					obj.Set("outbounds", newSub)
+				}
+				finalOutbounds = append(finalOutbounds, obj)
+			}
+		}
+		for _, n := range nodes { finalOutbounds = append(finalOutbounds, n) }
+		oConf.Set("outbounds", finalOutbounds)
 	}
 
-	config.Outbounds = finalOutbounds
-	config.Extra = nil
-
-	// 9. 输出
-	finalJSON, _ := json.MarshalIndent(config, "", "  ")
-	os.WriteFile(*outputPath, finalJSON, 0644)
-	fmt.Printf("[+] 转换完成！节点: %d, 地区组: %d, 保底: %s\n", len(nodes), len(regionGroups), defaultTag)
+	oConf.Delete("_extra")
+	return oConf
 }
 
-// --- 解析逻辑部分 ---
+func writeToTarget(content, path, label string) {
+	if path == "SKIP" { return }
+	if path == "" || path == "-" {
+		fmt.Println(content)
+	} else {
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ 错误: 写入%s失败: %v\n", label, err)
+		} else {
+			fmt.Fprintf(os.Stderr, "✅ %s已保存至: %s\n", label, path)
+		}
+	}
+}
 
-func fetchAndParseNodes(subURL string) []SingBoxOutbound {
-	resp, err := http.Get(subURL)
-	if err != nil { return nil }
+func loadTemplate(path string) *orderedmap.OrderedMap {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ 错误: 无法读取模板 %s\n", path)
+		os.Exit(1)
+	}
+	o := orderedmap.New()
+	if err := json.Unmarshal(data, &o); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ 错误: 解析模板内容失败: %v\n", err)
+		os.Exit(1)
+	}
+	return o
+}
+
+func getExtra(o *orderedmap.OrderedMap) ExtraConfig {
+	var e ExtraConfig
+	if v, exists := o.Get("_extra"); exists {
+		b, _ := json.Marshal(v)
+		json.Unmarshal(b, &e)
+	}
+	return e
+}
+
+func fixGoJsonStyle(input string) string {
+	r := strings.NewReplacer("\\u0026", "&", "\\u003c", "<", "\\u003e", ">")
+	output := r.Replace(input)
+	re := regexp.MustCompile(`\[\s+([^\[\]\n]+)\s+\]`)
+	output = re.ReplaceAllString(output, `[$1]`)
+	return output
+}
+
+func fetchSubscription(url string) string {
+	resp, err := http.Get(url)
+	if err != nil { return "" }
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	content := decodeSub(string(body))
-	lines := strings.Split(content, "\n")
-	var outbounds []SingBoxOutbound
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" { continue }
-		var node *SingBoxOutbound
-		if strings.HasPrefix(line, "trojan://") {
-			node = parseStandard(line, "trojan")
-		} else if strings.HasPrefix(line, "vmess://") {
-			node = parseVMess(line)
-		} else if strings.HasPrefix(line, "vless://") {
-			node = parseStandard(line, "vless")
-		} else if strings.HasPrefix(line, "ss://") {
-			node = parseSS(line)
-		}
-		if node != nil { outbounds = append(outbounds, *node) }
-	}
-	return outbounds
+	return string(body)
 }
 
-func parseStandard(uri, protocolType string) *SingBoxOutbound {
-	u, err := url.Parse(uri)
-	if err != nil { return nil }
-	port, _ := strconv.Atoi(u.Port())
-	tag, _ := url.QueryUnescape(u.Fragment)
-	node := &SingBoxOutbound{
-		Tag: tag, Type: protocolType, Server: u.Hostname(), ServerPort: port,
-	}
-	if protocolType == "trojan" {
-		node.Password = u.User.Username()
-	} else {
-		node.UUID = u.User.Username()
-	}
-	sni := u.Query().Get("sni")
-	if sni == "" { sni = u.Hostname() }
-	node.TLS = &TLSConfig{
-		Enabled: true, ServerName: sni, Insecure: false,
-		UTLS: &UTLSConfig{Enabled: true, Fingerprint: "chrome"},
-	}
-	return node
-}
-
-func parseVMess(uri string) *SingBoxOutbound {
-	data := strings.TrimPrefix(uri, "vmess://")
-	decoded, err := base64.StdEncoding.DecodeString(data)
-	if err != nil { return nil }
-	var v VMessJSON
-	if err := json.Unmarshal(decoded, &v); err != nil { return nil }
-	var port int
-	switch p := v.Port.(type) {
-	case float64: port = int(p)
-	case string: port, _ = strconv.Atoi(p)
-	}
-	node := &SingBoxOutbound{
-		Tag: v.Ps, Type: "vmess", Server: v.Add, ServerPort: port, UUID: v.Id, Security: "auto",
-	}
-	if v.Tls == "tls" {
-		sni := v.Sni
-		if sni == "" { sni = v.Add }
-		node.TLS = &TLSConfig{
-			Enabled: true, ServerName: sni, Insecure: false,
-			UTLS: &UTLSConfig{Enabled: true, Fingerprint: "chrome"},
-		}
-	}
-	if v.Net != "" && v.Net != "tcp" {
-		node.Transport = &TransportConfig{Type: v.Net, Path: v.Path}
-	}
-	return node
-}
-
-func parseSS(uri string) *SingBoxOutbound {
-	u, _ := url.Parse(uri)
-	tag, _ := url.QueryUnescape(u.Fragment)
-	port, _ := strconv.Atoi(u.Port())
-	userInfo := u.User.String()
-	if dec, err := base64.RawURLEncoding.DecodeString(userInfo); err == nil {
-		userInfo = string(dec)
-	}
-	node := &SingBoxOutbound{
-		Tag: tag, Type: "shadowsocks", Server: u.Hostname(), ServerPort: port, Method: "aes-256-gcm",
-	}
-	if strings.Contains(userInfo, ":") {
-		parts := strings.SplitN(userInfo, ":", 2)
-		node.Method = parts[0]
-		node.Password = parts[1]
-	} else {
-		node.Password = userInfo
-	}
-	return node
-}
-
-func decodeSub(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if len(raw)%4 != 0 { raw += strings.Repeat("=", 4-len(raw)%4) }
-	decoded, err := base64.StdEncoding.DecodeString(raw)
-	if err != nil {
-		decoded, err = base64.URLEncoding.DecodeString(raw)
-		if err != nil { return raw }
-	}
-	return string(decoded)
+func isFlagPassed(name string) bool {
+	found := false
+	flag.Visit(func(f *flag.Flag) { if f.Name == name { found = true } })
+	return found
 }
