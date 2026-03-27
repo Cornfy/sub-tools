@@ -62,7 +62,6 @@ release:
 	@echo " -> Android ARM64..."
 	@$(GO_BUILD_VARS) GOOS=android GOARCH=arm64 go build $(GO_BUILD_FLAGS) -ldflags="$(LDFLAGS_RELEASE)" -o $(BUILD_DIR)/$(BINARY_NAME)_android_arm64
 	
-	@cp template.json $(BUILD_DIR)/
 	@echo "Release binaries are ready in ./$(BUILD_DIR)"
 
 ## clean: 清理构建目录

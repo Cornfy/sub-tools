@@ -29,10 +29,10 @@ type SingBoxOutbound struct {
 	DownMbps       int              `json:"down_mbps,omitempty"`
 	AuthStr        string           `json:"auth_str,omitempty"`
 	// 模板专用字段
-	Outbounds []string    `json:"outbounds,omitempty"`
 	URL       string      `json:"url,omitempty"`
 	Interval  string      `json:"interval,omitempty"`
 	Tolerance interface{} `json:"tolerance,omitempty"`
+	Outbounds []string    `json:"outbounds,omitempty"`
 }
 
 type TLSConfig struct {

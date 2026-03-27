@@ -1,6 +1,6 @@
 {
   "_extra": {
-    "sub_url": "http://your-provider.com/api/v1/client/subscribe?token=...",
+    "sub_url": "http://example-subscription-provider",
     "filter_keywords": "重置|剩余|到期|官网|提示|域名|流量|群组",
     "regions": [
       ["美国|US|United States|🇺🇸", "🇺🇸 美国"],
@@ -222,21 +222,13 @@
       "url": "https://www.gstatic.com/generate_204",
       "interrupt_exist_connections": true,
       "interval": "3m",
-      "tolerance": "150",
+      "tolerance": 150,
       "outbounds": ["<all-proxies>"]
     },
     "<dynamic-region-groups>"
   ], 
   "route": {
     "rule_set": [
-      {
-        "tag": "GeoIP-Private",
-        "type": "remote",
-        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/private.srs",
-        "format": "binary",
-        "download_detour": "🎯 直连",
-        "update_interval": "24h"
-      },
       {
         "tag": "GeoSite-Private",
         "type": "remote",
@@ -246,9 +238,9 @@
         "update_interval": "24h"
       },
       {
-        "tag": "GeoIP-CN",
+        "tag": "GeoIP-Private",
         "type": "remote",
-        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/cn.srs",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/private.srs",
         "format": "binary",
         "download_detour": "🎯 直连",
         "update_interval": "24h"
@@ -257,6 +249,14 @@
         "tag": "GeoSite-CN",
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/cn.srs",
+        "format": "binary",
+        "download_detour": "🎯 直连",
+        "update_interval": "24h"
+      },
+      {
+        "tag": "GeoIP-CN",
+        "type": "remote",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/cn.srs",
         "format": "binary",
         "download_detour": "🎯 直连",
         "update_interval": "24h"
@@ -378,11 +378,11 @@
       },
       {
         "action": "sniff",
-        "inbound": "tun-in"
+        "inbound": ["tun-in"]
       },
       {
         "action": "hijack-dns",
-        "protocol": "dns"
+        "protocol": ["dns"]
       },
       {
         "inbound": ["ssh-in"],
@@ -427,7 +427,7 @@
         "outbound": "🎯 直连"
       },
       {
-        "network": "icmp",
+        "network": ["icmp"],
         "outbound": "🎯 直连"
       },
       {
