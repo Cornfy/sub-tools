@@ -1,13 +1,16 @@
 {
   "_extra": {
-    "sub_url": "http://example-subscription-provider",
+    "sub_urls": [
+      ["sub-name-1", "http://example-subscription-provider-1"],
+      ["sub-name-2", "http://example-subscription-provider-1"]
+    ],
     "filter_keywords": "重置|剩余|到期|官网|提示|域名|流量|群组",
     "regions": [
-      ["美国|US|United States|🇺🇸", "🇺🇸 美国"],
-      ["新加坡|SG|Singapore|🇸🇬", "🇸🇬 新加坡"],
-      ["日本|JP|Japan|🇯🇵", "🇯🇵 日本"],
-      ["香港|HK|Hong Kong|🇭🇰", "🇭🇰 香港"],
-      ["台湾|TW|Taiwan|🇹🇼", "🇹🇼 台湾"]
+      ["🇺🇸 美国", "美国|US|United States|🇺🇸"],
+      ["🇸🇬 新加坡", "新加坡|SG|Singapore|🇸🇬"],
+      ["🇯🇵 日本", "日本|JP|Japan|🇯🇵"],
+      ["🇭🇰 香港", "香港|HK|Hong Kong|🇭🇰"],
+      ["🇹🇼 台湾", "台湾|TW|Taiwan|🇹🇼"]
     ]
   },
   "log": {
@@ -222,7 +225,7 @@
       "url": "https://www.gstatic.com/generate_204",
       "interrupt_exist_connections": true,
       "interval": "3m",
-      "tolerance": 150,
+      "tolerance": "150",
       "outbounds": ["<all-proxies>"]
     },
     "<dynamic-region-groups>"
@@ -387,7 +390,7 @@
       {
         "inbound": ["ssh-in"],
         "source_ip_cidr": [
-          "192.168.2.0/24",
+          "192.168.0.0/16",
           "10.0.0.0/8"
         ],
         "port": [7743],

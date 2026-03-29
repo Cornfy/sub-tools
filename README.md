@@ -9,7 +9,7 @@ Stop relying on heavy JavaScript engines. **SUB-TOOL** brings the robustness of 
 - **Industrial-Grade Parsing**: Native implementation of complex protocol mapping (VLESS/Reality, VMess JSON/Query, Trojan, Shadowsocks SIP002, Hysteria 1/2).
 - **Zero Runtime Dependencies**: No Node.js or JS engine required. A single static binary for Linux, Windows, macOS, and Android.
 - **Diff-Friendly JSON**: Powered by `orderedmap`, it **strictly preserves the field order** of your `template.json` (e.g., Log -> DNS -> Outbounds).
-- **Multi-Source Collection**: Aggregate nodes from multiple subscription URLs into a single configuration.
+- **Multi-Source Collection**: Aggregate nodes from multiple subscription URLs into a single configuration directly via template or CLI.
 - **Smart Logic**:
     - **Regex-Based Grouping**: Categorize nodes into country-based `urltest` groups using flexible Regex.
     - **Keyword Filtering**: Clean up your node list by filtering out "Expired" or "Traffic" notices.
@@ -26,7 +26,13 @@ Stop relying on heavy JavaScript engines. **SUB-TOOL** brings the robustness of 
 # Initialize and fetch dependencies
 go mod tidy
 
-# Build local version
+# Build with version info (v0.3.0 for example)
+go build -ldflags "-X main.applicationVersionIdentifier=v0.3.0" -o sub-tool .
+
+# Build using Makefile
+make build
+
+# Get help information for the Makefile
 make help
 ```
 
@@ -35,7 +41,7 @@ make help
 **SUB-TOOL** supports multiple operation modes:
 
 ```bash
-# Generate full Sing-box config to stdout (using template.json)
+# Generate full Sing-box config (using template.json)
 ./sub-tool -url "http://example.com/sub" -config-gen config.json
 
 # Aggregate multiple sources into a specific file
@@ -50,27 +56,33 @@ make help
 
 ## 🛠️ Configuration (template.json)
 
-The `_extra` block controls the magic. It is automatically stripped from the final output:
+The `_extra` block controls the magic. It is automatically stripped from the final output. 
+
+> **⚠️ Breaking Changes in v0.3.0:**
+> 1. `sub_url` (String) has been replaced by `sub_urls` (List of [Label, URL]).
+> 2. `regions` format is now strictly `["Group Label", "Regex Pattern"]`.
 
 ```json
 {
   "_extra": {
-    "sub_url": "Optional default URL",
+    "sub_urls": [
+      ["Main Source", "https://example.com/sub1"],
+      ["Backup Source", "https://example.com/sub2"]
+    ],
     "filter_keywords": "Reset|Remaining|Expired|Traffic",
     "regions": [
-      ["Hong Kong|HK|🇭🇰", "🇭🇰 Hong Kong"],
-      ["United States|US|🇺🇸", "🇺🇸 United States"]
+      ["🇭🇰 Hong Kong", "Hong Kong|HK|🇭🇰"],
+      ["🇺🇸 United States", "United States|US|🇺🇸"]
     ]
   },
-  "log": { "level": "info" },
   "outbounds": [
+    { "type": "direct", "tag": "🎯 Direct" },
     {
       "type": "selector",
       "tag": "⚙️ Proxy",
       "outbounds": ["🎯 Direct", "<all-region-groups>", "<all-proxies>"]
     },
-    "<dynamic-region-groups>",
-    { "type": "direct", "tag": "🎯 Direct" }
+    "<dynamic-region-groups>"
   ]
 }
 ```
@@ -79,7 +91,7 @@ The `_extra` block controls the magic. It is automatically stripped from the fin
 
 | Flag | Description |
 | :--- | :--- |
-| `-url` | Subscription source URL. Can be specified multiple times. |
+| `-url` | Subscription source URL. Can be specified multiple times to merge sources. |
 | `-template` | Path to your Sing-box template JSON. |
 | `-config-gen` | Target path for the full configuration (`-` for stdout). |
 | `-node-gen` | Target path for the raw nodes list JSON. |

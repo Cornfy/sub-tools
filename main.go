@@ -18,40 +18,57 @@ import (
 
 var version = "development"
 
-type urlSlice []string
-func (s *urlSlice) String() string { return strings.Join(*s, ", ") }
-func (s *urlSlice) Set(value string) error {
-	*s = append(*s, value)
+// SubscriptionUrlListContainer 存储从命令行输入的多个订阅源地址
+type SubscriptionUrlListContainer []string
+
+func (container *SubscriptionUrlListContainer) String() string {
+	return strings.Join(*container, ", ")
+}
+func (container *SubscriptionUrlListContainer) Set(inputValue string) error {
+	*container = append(*container, inputValue)
 	return nil
 }
 
-type singleString struct {
-	value string
-	isSet bool
+// SingleTemplatePathArgument 确保转换模板路径参数在命令行中仅被指定一次
+type SingleTemplatePathArgument struct {
+	absoluteOrRelativePath string
+	hasBeenExplicitlySet   bool
 }
-func (s *singleString) String() string { return s.value }
-func (s *singleString) Set(v string) error {
-	if s.isSet { return fmt.Errorf("只能指定一个模板文件") }
-	s.value = v
-	s.isSet = true
+
+func (argument *SingleTemplatePathArgument) String() string { return argument.absoluteOrRelativePath }
+func (argument *SingleTemplatePathArgument) Set(inputValue string) error {
+	if argument.hasBeenExplicitlySet {
+		return fmt.Errorf("错误: 只能指定一个模板文件")
+	}
+	argument.absoluteOrRelativePath = inputValue
+	argument.hasBeenExplicitlySet = true
 	return nil
 }
 
-type ExtraConfig struct {
-	SubURL         string     `json:"sub_url"`
-	FilterKeywords string     `json:"filter_keywords"`
-	Regions        [][]string `json:"regions"`
+// TemplateLogicControlConfiguration 定义了模板中 `_extra` 字段的结构，用于控制转换逻辑
+type TemplateLogicControlConfiguration struct {
+	RemoteSubscriptionUrls [][]string `json:"sub_urls"`
+	NodeFilterRegexPattern string     `json:"filter_keywords"`
+	RegionalGroupConfigs   [][]string `json:"regions"`
+}
+
+// ScheduledSubscriptionFetchTask 描述一个待执行的远程订阅抓取任务
+type ScheduledSubscriptionFetchTask struct {
+	SubscriptionLabel string
+	SubscriptionUrl   string
 }
 
 func main() {
-	var urls urlSlice
-	flag.Var(&urls, "url", "订阅源 (可多次指定)")
-	var tmpl singleString
-	flag.Var(&tmpl, "template", "转换模板")
-	nodeOut := flag.String("node-gen", "SKIP", "输出纯节点 JSON 路径")
-	configOut := flag.String("config-gen", "SKIP", "输出完整配置路径")
-	showVersion := flag.Bool("version", false, "显示版本号")
-	flag.BoolVar(showVersion, "v", false, "显示版本号 (简写)")
+	var manuallySpecifiedSubscriptionUrls SubscriptionUrlListContainer
+	flag.Var(&manuallySpecifiedSubscriptionUrls, "url", "远程订阅源地址 (可多次指定以合并)")
+
+	var providedTemplateFilePath SingleTemplatePathArgument
+	flag.Var(&providedTemplateFilePath, "template", "用于生成完整配置的 JSON 模板文件路径")
+
+	destinationPathForRawNodeListJson := flag.String("node-gen", "SKIP", "输出纯节点列表 JSON 的文件路径")
+	destinationPathForFullConfigurationJson := flag.String("config-gen", "SKIP", "输出完整 Sing-box 配置文件路径")
+	displayVersionInformation := flag.Bool("version", false, "显示当前程序版本号")
+	flag.BoolVar(displayVersionInformation, "v", false, "显示当前程序版本号 (简写)")
 
 	flag.Usage = func() {
 		bold, cyan, yellow, reset := "\033[1m", "\033[36m", "\033[33m", "\033[0m"
@@ -64,229 +81,360 @@ func main() {
 	}
 	flag.Parse()
 
-	if *showVersion {
+	if *displayVersionInformation {
 		fmt.Printf("Sub-Tool Version: %s\n", version)
 		return
 	}
 
-	hasNodeAction := isFlagPassed("node-gen")
-	hasConfigAction := isFlagPassed("config-gen")
-	if !hasNodeAction && !hasConfigAction {
-		if len(urls) > 0 || tmpl.isSet {
-			if tmpl.isSet { hasConfigAction = true; *configOut = "-" } else { hasNodeAction = true; *nodeOut = "-" }
-			fmt.Fprintln(os.Stderr, "💡 提示: 未指定输出动作，默认开启 Stdout 输出模式")
-		} else { flag.Usage(); return }
+	shouldGenerateNodeListFile := checkIfCommandLineFlagWasExplicitlyProvided("node-gen")
+	shouldGenerateFullConfigFile := checkIfCommandLineFlagWasExplicitlyProvided("config-gen")
+	isAnyOutputDestinationDefined := shouldGenerateNodeListFile || shouldGenerateFullConfigFile
+	isAnyInputSourceProvidedViaCli := len(manuallySpecifiedSubscriptionUrls) > 0 || providedTemplateFilePath.hasBeenExplicitlySet
+
+	// 交互逻辑保护：如果用户既没给输入也没给输出参数，显示帮助
+	if !isAnyOutputDestinationDefined && !isAnyInputSourceProvidedViaCli {
+		flag.Usage()
+		return
 	}
 
-	var oConf *orderedmap.OrderedMap
-	var extra ExtraConfig
-	effectiveTmpl := tmpl.value
+	// 自动回退逻辑：如果未指定输出文件，默认将结果打印到标准输出 (Stdout)
+	if !isAnyOutputDestinationDefined {
+		fmt.Fprintln(os.Stderr, "💡 提示: 未指定具体的输出文件路径，默认开启标准输出 (Stdout) 模式")
+		if providedTemplateFilePath.hasBeenExplicitlySet {
+			shouldGenerateFullConfigFile = true
+			*destinationPathForFullConfigurationJson = "-"
+		} else {
+			shouldGenerateNodeListFile = true
+			*destinationPathForRawNodeListJson = "-"
+		}
+	}
 
-	if hasConfigAction {
-		if effectiveTmpl == "" {
-			if _, err := os.Stat("template.json"); err == nil {
-				effectiveTmpl = "template.json"
-				fmt.Fprintln(os.Stderr, "⚠️  自动回退至 template.json")
-			} else {
-				fmt.Fprintln(os.Stderr, "❌ 错误: 生成配置必须提供模板文件。")
-				os.Exit(1)
+	var parsedTemplateAsOrderedMap *orderedmap.OrderedMap
+	var extractedControlLogicConfig TemplateLogicControlConfiguration
+	finalEffectiveTemplatePath := providedTemplateFilePath.absoluteOrRelativePath
+
+	if providedTemplateFilePath.hasBeenExplicitlySet {
+		fmt.Fprintf(os.Stderr, "📂 已加载用户指定的模板文件: %s\n", finalEffectiveTemplatePath)
+	}
+
+	// 完整配置生成前的准备：解析模板与提取控制逻辑
+	if shouldGenerateFullConfigFile {
+		if finalEffectiveTemplatePath == "" && !checkIfDefaultTemplateFileExists() {
+			fmt.Fprintln(os.Stderr, "❌ 错误: 生成完整配置必须提供模板文件。")
+			os.Exit(1)
+		}
+		if finalEffectiveTemplatePath == "" {
+			finalEffectiveTemplatePath = "template.json"
+			fmt.Fprintln(os.Stderr, "⚠️  未指定模板文件，自动尝试回退至当前目录下的 template.json")
+		}
+		parsedTemplateAsOrderedMap = readAndParseJsonTemplateIntoOrderedMap(finalEffectiveTemplatePath)
+		extractedControlLogicConfig = extractExtraControlConfigurationFromTemplate(parsedTemplateAsOrderedMap)
+	}
+
+	// 过滤规则静默加载：如果仅生成节点列表，尝试从默认模板中提取过滤关键字
+	if shouldGenerateNodeListFile && !shouldGenerateFullConfigFile && checkIfDefaultTemplateFileExists() && finalEffectiveTemplatePath == "" {
+		fmt.Fprintln(os.Stderr, "ℹ️  检测到 template.json，已自动加载其中的过滤规则")
+		extractedControlLogicConfig = extractExtraControlConfigurationFromTemplate(readAndParseJsonTemplateIntoOrderedMap("template.json"))
+	}
+
+	// --- 订阅源任务归一化 ---
+	var subscriptionFetchQueue []ScheduledSubscriptionFetchTask
+	if len(manuallySpecifiedSubscriptionUrls) > 0 {
+		for index, url := range manuallySpecifiedSubscriptionUrls {
+			subscriptionFetchQueue = append(subscriptionFetchQueue, ScheduledSubscriptionFetchTask{
+				SubscriptionLabel: fmt.Sprintf("CLI-Input-%d", index+1), 
+				SubscriptionUrl:   url,
+			})
+		}
+	} else {
+		for _, urlPair := range extractedControlLogicConfig.RemoteSubscriptionUrls {
+			if len(urlPair) >= 2 {
+				subscriptionFetchQueue = append(subscriptionFetchQueue, ScheduledSubscriptionFetchTask{
+					SubscriptionLabel: urlPair[0], 
+					SubscriptionUrl:   urlPair[1],
+				})
 			}
 		}
-		oConf = loadTemplate(effectiveTmpl)
-		extra = getExtra(oConf)
-	} else if hasNodeAction {
-		if _, err := os.Stat("template.json"); err == nil && effectiveTmpl == "" {
-			fmt.Fprintln(os.Stderr, "ℹ️  已加载 template.json 中的过滤规则")
-			extra = getExtra(loadTemplate("template.json"))
-		}
 	}
 
-	var finalURLList []string
-	if len(urls) > 0 { finalURLList = urls } else if extra.SubURL != "" { finalURLList = []string{extra.SubURL} }
-
-	if len(finalURLList) == 0 {
-		fmt.Fprintln(os.Stderr, "❌ 错误: 没有任何订阅源。")
+	if len(subscriptionFetchQueue) == 0 {
+		fmt.Fprintln(os.Stderr, "❌ 错误: 未找到任何有效的远程订阅源地址。")
 		os.Exit(1)
 	}
 
-	allNodes := collectWithStats(finalURLList, extra)
+	// 执行抓取与转换逻辑
+	standardizedOutboundNodesList := fetchAndConvertProxiesFromRemoteSources(subscriptionFetchQueue, extractedControlLogicConfig)
 
-	if len(allNodes) == 0 {
-		fmt.Fprintln(os.Stderr, "❌ 错误: 未能在提供的源中找到任何有效节点，操作终止。")
+	if len(standardizedOutboundNodesList) == 0 {
+		fmt.Fprintln(os.Stderr, "❌ 错误: 在提供的所有订阅源中均未找到有效节点，操作已终止。")
 		os.Exit(1)
 	}
 
-	if hasNodeAction {
-		fmt.Fprintln(os.Stderr, "📝 正在生成节点列表...")
-		data, _ := json.MarshalIndent(allNodes, "", "  ")
-		writeToTarget(fixGoJsonStyle(string(data)), *nodeOut, "节点列表")
+	// 输出动作 1: 生成纯节点 JSON 列表
+	if shouldGenerateNodeListFile {
+		fmt.Fprintln(os.Stderr, "📝 正在构建节点 JSON 列表...")
+		nodeListJsonData, _ := json.MarshalIndent(standardizedOutboundNodesList, "", "  ")
+		writeOutputContentToDestination(
+			postProcessJsonOutputToCorrectEncodingAndFormatting(string(nodeListJsonData)),
+			*destinationPathForRawNodeListJson,
+			"节点列表",
+		)
 	}
 
-	if hasConfigAction {
-		fmt.Fprintln(os.Stderr, "⚙️  正在执行注入...")
-		finalConf := injectToTemplate(oConf, extra, allNodes)
-		var buf bytes.Buffer
-		encoder := json.NewEncoder(&buf)
-		encoder.SetEscapeHTML(false)
-		encoder.SetIndent("", "  ")
-		encoder.Encode(finalConf)
-		writeToTarget(fixGoJsonStyle(buf.String()), *configOut, "完整配置")
+	// 输出动作 2: 执行模板注入生成完整 Sing-box 配置
+	if shouldGenerateFullConfigFile {
+		fmt.Fprintln(os.Stderr, "⚙️  正在执行占位符动态注入逻辑...")
+		finalConfigResultMap := injectNodesAndGroupsIntoTemplate(
+			parsedTemplateAsOrderedMap,
+			extractedControlLogicConfig,
+			standardizedOutboundNodesList,
+		)
+
+		var outputBuffer bytes.Buffer
+		jsonEncoder := json.NewEncoder(&outputBuffer)
+		jsonEncoder.SetEscapeHTML(false)
+		jsonEncoder.SetIndent("", "  ")
+		jsonEncoder.Encode(finalConfigResultMap)
+
+		writeOutputContentToDestination(
+			postProcessJsonOutputToCorrectEncodingAndFormatting(outputBuffer.String()),
+			*destinationPathForFullConfigurationJson,
+			"完整配置文件",
+		)
 	}
 }
 
-func collectWithStats(urls []string, extra ExtraConfig) []converter.SingBoxOutbound {
-	results := []converter.SingBoxOutbound{}
-	seen := make(map[string]bool)
-	totalF, totalFilt, totalD := 0, 0, 0
-	var filterReg *regexp.Regexp
-	if extra.FilterKeywords != "" {
-		filterReg = regexp.MustCompile("(?i)" + extra.FilterKeywords)
+func fetchAndConvertProxiesFromRemoteSources(
+	fetchTasks []ScheduledSubscriptionFetchTask,
+	controlConfig TemplateLogicControlConfiguration,
+) []converter.StandardSingBoxOutboundConfiguration {
+
+	finalNodesCollection := []converter.StandardSingBoxOutboundConfiguration{}
+	nodeUniqueFingerprintRegistry := make(map[string]bool)
+
+	var aggregateFoundCount, aggregateFilteredCount, aggregateDuplicateCountInt int
+
+	var filterRegexCompiler *regexp.Regexp
+	if controlConfig.NodeFilterRegexPattern != "" {
+		filterRegexCompiler = regexp.MustCompile("(?i)" + controlConfig.NodeFilterRegexPattern)
 	}
 
-	for i, u := range urls {
-		u = strings.TrimSpace(u)
-		if u == "" || u == "--" { continue }
-		fmt.Fprintf(os.Stderr, "🌐 [%d/%d] 正在抓取: %s\n", i+1, len(urls), u)
-		raw := fetchSubscription(u)
-		if raw == "" {
-			fmt.Fprintln(os.Stderr, "   ⚠️  抓取失败：内容为空")
+	for taskIndex, task := range fetchTasks {
+		fmt.Fprintf(os.Stderr, "🌐 [%d/%d] 正在请求远程订阅: [%s]\n", taskIndex+1, len(fetchTasks), task.SubscriptionLabel)
+
+		rawEncryptedContent := downloadRawContentFromRemoteUrl(task.SubscriptionUrl)
+		if rawEncryptedContent == "" {
+			fmt.Fprintln(os.Stderr, "   ⚠️  读取失败: 响应内容为空或请求出错")
 			continue
 		}
-		decoded, err := converter.RobustBase64Decode(raw)
-		if err != nil { decoded = raw }
 
-		count := 0
-		for _, line := range strings.Split(decoded, "\n") {
-			node, err := converter.ParseNode(strings.TrimSpace(line))
-			if err == nil && node != nil {
-				totalF++
-				if filterReg != nil && filterReg.MatchString(node.Tag) { totalFilt++ ; continue }
-				fp := fmt.Sprintf("%s:%d:%s", node.Server, node.ServerPort, node.Tag)
-				if seen[fp] { totalD++ ; continue }
-				results = append(results, *node)
-				seen[fp] = true
-				count++
-			}
+		// 尝试进行鲁棒性 Base64 解码
+		decodedContent, decodingError := converter.AttemptRobustBase64DecodingOfSubscriptionContent(rawEncryptedContent)
+		if decodingError != nil {
+			decodedContent = rawEncryptedContent // 如果解码失败，尝试作为明文解析
 		}
-		fmt.Fprintf(os.Stderr, "   ✅ 解析成功: %d 个有效节点\n", count)
-	}
-	fmt.Fprintf(os.Stderr, "📊 汇总: 发现 %d | 过滤 %d | 去重 %d | 最终保留 %d\n", 
-		totalF, totalFilt, totalD, len(results))
-	return results
-}
 
-func injectToTemplate(oConf *orderedmap.OrderedMap, extra ExtraConfig, nodes []converter.SingBoxOutbound) *orderedmap.OrderedMap {
-	var allProxyTags []string
-	for _, n := range nodes { allProxyTags = append(allProxyTags, n.Tag) }
+		var sourceParsed, sourceFiltered, sourceDuplicates, sourceAdded int
+		contentLines := strings.Split(decodedContent, "\n")
 
-	var regionGroupOutbounds []converter.SingBoxOutbound
-	var allRegionGroupTags []string
-	for _, regConf := range extra.Regions {
-		if len(regConf) < 2 { continue }
-		reg, _ := regexp.Compile("(?i)" + regConf[0])
-		var matched []string
-		for _, t := range allProxyTags {
-			if reg.MatchString(t) { matched = append(matched, t) }
-		}
-		if len(matched) > 0 {
-			group := converter.SingBoxOutbound{
-				Type: "urltest", Tag: regConf[1], Outbounds: matched,
-				URL: "https://www.gstatic.com/generate_204", Interval: "3m", Tolerance: 150,
-			}
-			regionGroupOutbounds = append(regionGroupOutbounds, group)
-			allRegionGroupTags = append(allRegionGroupTags, group.Tag)
-		}
-	}
+		for _, singleLine := range contentLines {
+			sanitizedLine := strings.TrimSpace(singleLine)
+			if sanitizedLine == "" { continue }
 
-	if rawOuts, exists := oConf.Get("outbounds"); exists {
-		outList := rawOuts.([]interface{})
-		var finalOutbounds []interface{}
-		for _, item := range outList {
-			if str, ok := item.(string); ok {
-				if str == "<dynamic-region-groups>" {
-					for _, rg := range regionGroupOutbounds { finalOutbounds = append(finalOutbounds, rg) }
-				} else { finalOutbounds = append(finalOutbounds, str) }
+			nodeObject, conversionError := converter.ConvertRawSubscriptionProtocolUriIntoStandardSingBoxOutbound(sanitizedLine)
+			if conversionError != nil || nodeObject == nil { continue }
+
+			sourceParsed++
+
+			// 匹配过滤逻辑
+			if filterRegexCompiler != nil && filterRegexCompiler.MatchString(nodeObject.Tag) {
+				sourceFiltered++
 				continue
 			}
-			if obj, ok := item.(orderedmap.OrderedMap); ok {
-				if rawSub, exists := obj.Get("outbounds"); exists {
-					subSlice := rawSub.([]interface{})
-					var newSub []string
-					for _, s := range subSlice {
-						sStr, _ := s.(string)
-						switch sStr {
-						case "<all-proxies>": newSub = append(newSub, allProxyTags...)
-						case "<all-region-groups>": newSub = append(newSub, allRegionGroupTags...)
-						default: newSub = append(newSub, sStr)
-						}
-					}
-					obj.Set("outbounds", newSub)
-				}
-				finalOutbounds = append(finalOutbounds, obj)
+
+			// 去重逻辑：基于 服务器+端口+名称 生成指纹
+			uniqueFingerprint := fmt.Sprintf("%s:%d:%s", nodeObject.ServerAddress, nodeObject.ServerPort, nodeObject.Tag)
+			if nodeUniqueFingerprintRegistry[uniqueFingerprint] {
+				sourceDuplicates++
+				continue
+			}
+
+			finalNodesCollection = append(finalNodesCollection, *nodeObject)
+			nodeUniqueFingerprintRegistry[uniqueFingerprint] = true
+			sourceAdded++
+		}
+
+		aggregateFoundCount += sourceParsed
+		aggregateFilteredCount += sourceFiltered
+		aggregateDuplicateCountInt += sourceDuplicates
+
+		fmt.Fprintf(os.Stderr, "   ✅ 处理统计: 解析 %d | 过滤 %d | 重复 %d | 新增 %d\n",
+			sourceParsed, sourceFiltered, sourceDuplicates, sourceAdded)
+	}
+
+	fmt.Fprintf(os.Stderr, "📊 最终汇总: 总发现 %d | 已过滤 %d | 已去重 %d | 最终保留 %d 个节点\n",
+		aggregateFoundCount, aggregateFilteredCount, aggregateDuplicateCountInt, len(finalNodesCollection))
+
+	return finalNodesCollection
+}
+
+func injectNodesAndGroupsIntoTemplate(
+	templateMap *orderedmap.OrderedMap,
+	controlConfig TemplateLogicControlConfiguration,
+	availableNodes []converter.StandardSingBoxOutboundConfiguration,
+) *orderedmap.OrderedMap {
+
+	var allNodeTagsList []string
+	for _, node := range availableNodes {
+		allNodeTagsList = append(allNodeTagsList, node.Tag)
+	}
+
+	var dynamicRegionGroupsCollection []converter.StandardSingBoxOutboundConfiguration
+	var allRegionGroupTagsList []string
+
+	// 处理动态区域分组逻辑
+	for _, regionRule := range controlConfig.RegionalGroupConfigs {
+		if len(regionRule) < 2 { continue }
+		groupLabel, regexPattern := regionRule[0], regionRule[1]
+		
+		regionRegex, _ := regexp.Compile("(?i)" + regexPattern)
+		
+		var matchedNodeTags []string
+		for _, tag := range allNodeTagsList {
+			if regionRegex.MatchString(tag) {
+				matchedNodeTags = append(matchedNodeTags, tag)
 			}
 		}
-		for _, n := range nodes { finalOutbounds = append(finalOutbounds, n) }
-		oConf.Set("outbounds", finalOutbounds)
-	}
 
-	oConf.Delete("_extra")
-	return oConf
-}
-
-func writeToTarget(content, path, label string) {
-	if path == "SKIP" { return }
-	if path == "" || path == "-" {
-		fmt.Println(content)
-	} else {
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			fmt.Fprintf(os.Stderr, "❌ 错误: 写入%s失败: %v\n", label, err)
-		} else {
-			fmt.Fprintf(os.Stderr, "✅ %s已保存至: %s\n", label, path)
+		if len(matchedNodeTags) > 0 {
+			newGroup := converter.StandardSingBoxOutboundConfiguration{
+				Type: "urltest", 
+				Tag: groupLabel, 
+				Outbounds: matchedNodeTags,
+				ConnectivityTestUrl: "https://www.gstatic.com/generate_204", 
+				TestInterval: "3m", 
+				ToleranceValue: 150,
+			}
+			dynamicRegionGroupsCollection = append(dynamicRegionGroupsCollection, newGroup)
+			allRegionGroupTagsList = append(allRegionGroupTagsList, groupLabel)
 		}
 	}
+
+	// 在模板的 outbounds 数组中寻找并替换占位符
+	if rawOutboundsInterface, exists := templateMap.Get("outbounds"); exists {
+		originalOutboundList := rawOutboundsInterface.([]interface{})
+		var newlyConstructedOutboundList []interface{}
+
+		for _, item := range originalOutboundList {
+			// 处理纯字符串形式的占位符 (例如单独的 "<dynamic-region-groups>")
+			if placeholderString, isString := item.(string); isString {
+				if placeholderString == "<dynamic-region-groups>" {
+					for _, rg := range dynamicRegionGroupsCollection {
+						newlyConstructedOutboundList = append(newlyConstructedOutboundList, rg)
+					}
+				} else {
+					newlyConstructedOutboundList = append(newlyConstructedOutboundList, placeholderString)
+				}
+				continue
+			}
+
+			// 处理对象形式的出站项 (如 selector 类型的分组)
+			if outboundObjectAsMap, isMap := item.(orderedmap.OrderedMap); isMap {
+				if subOutboundsInterface, exists := outboundObjectAsMap.Get("outbounds"); exists {
+					subOutboundTagsList := subOutboundsInterface.([]interface{})
+					var expandedOutboundTags []string
+					
+					for _, tagInterface := range subOutboundTagsList {
+						tagName, _ := tagInterface.(string)
+						switch tagName {
+						case "<all-proxies>":
+							expandedOutboundTags = append(expandedOutboundTags, allNodeTagsList...)
+						case "<all-region-groups>":
+							expandedOutboundTags = append(expandedOutboundTags, allRegionGroupTagsList...)
+						default:
+							expandedOutboundTags = append(expandedOutboundTags, tagName)
+						}
+					}
+					outboundObjectAsMap.Set("outbounds", expandedOutboundTags)
+				}
+				newlyConstructedOutboundList = append(newlyConstructedOutboundList, outboundObjectAsMap)
+			}
+		}
+
+		// 最后将所有解析出的底层节点追加到 outbounds 列表末尾
+		for _, node := range availableNodes {
+			newlyConstructedOutboundList = append(newlyConstructedOutboundList, node)
+		}
+		templateMap.Set("outbounds", newlyConstructedOutboundList)
+	}
+
+	// 移除模板中的辅助配置项，避免导出到最终配置
+	templateMap.Delete("_extra")
+	return templateMap
 }
 
-func loadTemplate(path string) *orderedmap.OrderedMap {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ 错误: 无法读取模板 %s\n", path)
+func writeOutputContentToDestination(finalContentBody, destinationPath, contentLabel string) {
+	if destinationPath == "SKIP" { return }
+	if destinationPath == "" || destinationPath == "-" {
+		fmt.Println(finalContentBody)
+		return
+	}
+	
+	writeError := os.WriteFile(destinationPath, []byte(finalContentBody), 0644)
+	if writeError != nil {
+		fmt.Fprintf(os.Stderr, "❌ 错误: 写入%s到文件失败: %v\n", contentLabel, writeError)
+	} else {
+		fmt.Fprintf(os.Stderr, "✅ %s已成功保存至: %s\n", contentLabel, destinationPath)
+	}
+}
+
+func readAndParseJsonTemplateIntoOrderedMap(filePath string) *orderedmap.OrderedMap {
+	fileBytes, readError := os.ReadFile(filePath)
+	if readError != nil {
+		fmt.Fprintf(os.Stderr, "❌ 错误: 无法读取指定的模板文件 %s\n", filePath)
 		os.Exit(1)
 	}
-	o := orderedmap.New()
-	if err := json.Unmarshal(data, &o); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ 错误: 解析模板内容失败: %v\n", err)
-		os.Exit(1)
+	targetMap := orderedmap.New()
+	json.Unmarshal(fileBytes, &targetMap)
+	return targetMap
+}
+
+func extractExtraControlConfigurationFromTemplate(orderedTemplate *orderedmap.OrderedMap) TemplateLogicControlConfiguration {
+	var controlConfig TemplateLogicControlConfiguration
+	if extraNode, exists := orderedTemplate.Get("_extra"); exists {
+		jsonBytes, _ := json.Marshal(extraNode)
+		json.Unmarshal(jsonBytes, &controlConfig)
 	}
-	return o
+	return controlConfig
 }
 
-func getExtra(o *orderedmap.OrderedMap) ExtraConfig {
-	var e ExtraConfig
-	if v, exists := o.Get("_extra"); exists {
-		b, _ := json.Marshal(v)
-		json.Unmarshal(b, &e)
-	}
-	return e
+// postProcessJsonOutputToCorrectEncodingAndFormatting 修复 JSON 转义后的 HTML 字符并美化数组排版
+func postProcessJsonOutputToCorrectEncodingAndFormatting(jsonInput string) string {
+	htmlCharacterReplacer := strings.NewReplacer("\\u0026", "&", "\\u003c", "<", "\\u003e", ">")
+	arrayCompactRegex := regexp.MustCompile(`\[\s+([^\[\]\n]+)\s+\]`)
+	
+	unescapedJson := htmlCharacterReplacer.Replace(jsonInput)
+	return arrayCompactRegex.ReplaceAllString(unescapedJson, `[$1]`)
 }
 
-func fixGoJsonStyle(input string) string {
-	r := strings.NewReplacer("\\u0026", "&", "\\u003c", "<", "\\u003e", ">")
-	output := r.Replace(input)
-	re := regexp.MustCompile(`\[\s+([^\[\]\n]+)\s+\]`)
-	output = re.ReplaceAllString(output, `[$1]`)
-	return output
+func downloadRawContentFromRemoteUrl(targetUrl string) string {
+	httpClientResponse, requestError := http.Get(targetUrl)
+	if requestError != nil { return "" }
+	defer httpClientResponse.Body.Close()
+	
+	responseBodyBytes, _ := io.ReadAll(httpClientResponse.Body)
+	return string(responseBodyBytes)
 }
 
-func fetchSubscription(url string) string {
-	resp, err := http.Get(url)
-	if err != nil { return "" }
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	return string(body)
+func checkIfCommandLineFlagWasExplicitlyProvided(flagName string) bool {
+	wasProvided := false
+	flag.Visit(func(f *flag.Flag) { 
+		if f.Name == flagName { wasProvided = true } 
+	})
+	return wasProvided
 }
 
-func isFlagPassed(name string) bool {
-	found := false
-	flag.Visit(func(f *flag.Flag) { if f.Name == name { found = true } })
-	return found
+func checkIfDefaultTemplateFileExists() bool {
+	fileInfo, checkError := os.Stat("template.json")
+	return checkError == nil && !fileInfo.IsDir()
 }
