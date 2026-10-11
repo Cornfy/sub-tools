@@ -8,6 +8,7 @@ sub-tool*
 *.dylib
 
 # --- Go 相关 ---
+.cache/
 vendor/
 *.test
 *.out

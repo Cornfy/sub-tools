@@ -3,13 +3,16 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 
 	"sub-tool/converter"
 
@@ -117,8 +120,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "📂 已加载用户指定的模板文件: %s\n", finalEffectiveTemplatePath)
 	}
 
-	// 完整配置生成前的准备：解析模板与提取控制逻辑
-	if shouldGenerateFullConfigFile {
+	// 显式模板在节点模式下也提供订阅源和过滤规则。
+	if shouldGenerateFullConfigFile || providedTemplateFilePath.hasBeenExplicitlySet {
 		if finalEffectiveTemplatePath == "" && !checkIfDefaultTemplateFileExists() {
 			fmt.Fprintln(os.Stderr, "❌ 错误: 生成完整配置必须提供模板文件。")
 			os.Exit(1)
@@ -142,7 +145,7 @@ func main() {
 	if len(manuallySpecifiedSubscriptionUrls) > 0 {
 		for index, url := range manuallySpecifiedSubscriptionUrls {
 			subscriptionFetchQueue = append(subscriptionFetchQueue, ScheduledSubscriptionFetchTask{
-				SubscriptionLabel: fmt.Sprintf("CLI-Input-%d", index+1), 
+				SubscriptionLabel: fmt.Sprintf("CLI-Input-%d", index+1),
 				SubscriptionUrl:   url,
 			})
 		}
@@ -150,7 +153,7 @@ func main() {
 		for _, urlPair := range extractedControlLogicConfig.RemoteSubscriptionUrls {
 			if len(urlPair) >= 2 {
 				subscriptionFetchQueue = append(subscriptionFetchQueue, ScheduledSubscriptionFetchTask{
-					SubscriptionLabel: urlPair[0], 
+					SubscriptionLabel: urlPair[0],
 					SubscriptionUrl:   urlPair[1],
 				})
 			}
@@ -175,7 +178,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "📝 正在构建节点 JSON 列表...")
 		nodeListJsonData, _ := json.MarshalIndent(standardizedOutboundNodesList, "", "  ")
 		writeOutputContentToDestination(
-			postProcessJsonOutputToCorrectEncodingAndFormatting(string(nodeListJsonData)),
+			string(nodeListJsonData),
 			*destinationPathForRawNodeListJson,
 			"节点列表",
 		)
@@ -197,7 +200,7 @@ func main() {
 		jsonEncoder.Encode(finalConfigResultMap)
 
 		writeOutputContentToDestination(
-			postProcessJsonOutputToCorrectEncodingAndFormatting(outputBuffer.String()),
+			outputBuffer.String(),
 			*destinationPathForFullConfigurationJson,
 			"完整配置文件",
 		)
@@ -222,9 +225,9 @@ func fetchAndConvertProxiesFromRemoteSources(
 	for taskIndex, task := range fetchTasks {
 		fmt.Fprintf(os.Stderr, "🌐 [%d/%d] 正在请求远程订阅: [%s]\n", taskIndex+1, len(fetchTasks), task.SubscriptionLabel)
 
-		rawEncryptedContent := downloadRawContentFromRemoteUrl(task.SubscriptionUrl)
-		if rawEncryptedContent == "" {
-			fmt.Fprintln(os.Stderr, "   ⚠️  读取失败: 响应内容为空或请求出错")
+		rawEncryptedContent, downloadError := downloadRawContentFromRemoteUrl(task.SubscriptionUrl)
+		if downloadError != nil {
+			fmt.Fprintf(os.Stderr, "   ⚠️  读取失败: %s\n", downloadError)
 			continue
 		}
 
@@ -234,15 +237,22 @@ func fetchAndConvertProxiesFromRemoteSources(
 			decodedContent = rawEncryptedContent // 如果解码失败，尝试作为明文解析
 		}
 
-		var sourceParsed, sourceFiltered, sourceDuplicates, sourceAdded int
+		var sourceParsed, sourceFiltered, sourceDuplicates, sourceAdded, sourceInvalid int
+		failureCounts := make(map[string]int)
 		contentLines := strings.Split(decodedContent, "\n")
 
 		for _, singleLine := range contentLines {
 			sanitizedLine := strings.TrimSpace(singleLine)
-			if sanitizedLine == "" { continue }
+			if sanitizedLine == "" {
+				continue
+			}
 
 			nodeObject, conversionError := converter.ConvertRawSubscriptionProtocolUriIntoStandardSingBoxOutbound(sanitizedLine)
-			if conversionError != nil || nodeObject == nil { continue }
+			if conversionError != nil || nodeObject == nil {
+				sourceInvalid++
+				failureCounts[converter.DetermineSubscriptionRecordFailureCategoryFromConversionError(sanitizedLine, conversionError)]++
+				continue
+			}
 
 			sourceParsed++
 
@@ -268,8 +278,16 @@ func fetchAndConvertProxiesFromRemoteSources(
 		aggregateFilteredCount += sourceFiltered
 		aggregateDuplicateCountInt += sourceDuplicates
 
-		fmt.Fprintf(os.Stderr, "   ✅ 处理统计: 解析 %d | 过滤 %d | 重复 %d | 新增 %d\n",
-			sourceParsed, sourceFiltered, sourceDuplicates, sourceAdded)
+		fmt.Fprintf(os.Stderr, "   ✅ 处理统计: 解析 %d | 过滤 %d | 重复 %d | 新增 %d | 无效/不支持 %d\n",
+			sourceParsed, sourceFiltered, sourceDuplicates, sourceAdded, sourceInvalid)
+		var categories []string
+		for category := range failureCounts {
+			categories = append(categories, category)
+		}
+		sort.Strings(categories)
+		for _, category := range categories {
+			fmt.Fprintf(os.Stderr, "   🔎 跳过原因: %s | %d 条\n", category, failureCounts[category])
+		}
 	}
 
 	fmt.Fprintf(os.Stderr, "📊 最终汇总: 总发现 %d | 已过滤 %d | 已去重 %d | 最终保留 %d 个节点\n",
@@ -294,11 +312,13 @@ func injectNodesAndGroupsIntoTemplate(
 
 	// 处理动态区域分组逻辑
 	for _, regionRule := range controlConfig.RegionalGroupConfigs {
-		if len(regionRule) < 2 { continue }
+		if len(regionRule) < 2 {
+			continue
+		}
 		groupLabel, regexPattern := regionRule[0], regionRule[1]
-		
+
 		regionRegex, _ := regexp.Compile("(?i)" + regexPattern)
-		
+
 		var matchedNodeTags []string
 		for _, tag := range allNodeTagsList {
 			if regionRegex.MatchString(tag) {
@@ -308,12 +328,12 @@ func injectNodesAndGroupsIntoTemplate(
 
 		if len(matchedNodeTags) > 0 {
 			newGroup := converter.StandardSingBoxOutboundConfiguration{
-				Type: "urltest", 
-				Tag: groupLabel, 
-				Outbounds: matchedNodeTags,
-				ConnectivityTestUrl: "https://www.gstatic.com/generate_204", 
-				TestInterval: "3m", 
-				ToleranceValue: 150,
+				Type:                "urltest",
+				Tag:                 groupLabel,
+				Outbounds:           matchedNodeTags,
+				ConnectivityTestUrl: "https://www.gstatic.com/generate_204",
+				TestInterval:        "3m",
+				ToleranceValue:      150,
 			}
 			dynamicRegionGroupsCollection = append(dynamicRegionGroupsCollection, newGroup)
 			allRegionGroupTagsList = append(allRegionGroupTagsList, groupLabel)
@@ -343,7 +363,7 @@ func injectNodesAndGroupsIntoTemplate(
 				if subOutboundsInterface, exists := outboundObjectAsMap.Get("outbounds"); exists {
 					subOutboundTagsList := subOutboundsInterface.([]interface{})
 					var expandedOutboundTags []string
-					
+
 					for _, tagInterface := range subOutboundTagsList {
 						tagName, _ := tagInterface.(string)
 						switch tagName {
@@ -374,12 +394,14 @@ func injectNodesAndGroupsIntoTemplate(
 }
 
 func writeOutputContentToDestination(finalContentBody, destinationPath, contentLabel string) {
-	if destinationPath == "SKIP" { return }
+	if destinationPath == "SKIP" {
+		return
+	}
 	if destinationPath == "" || destinationPath == "-" {
 		fmt.Println(finalContentBody)
 		return
 	}
-	
+
 	writeError := os.WriteFile(destinationPath, []byte(finalContentBody), 0644)
 	if writeError != nil {
 		fmt.Fprintf(os.Stderr, "❌ 错误: 写入%s到文件失败: %v\n", contentLabel, writeError)
@@ -408,28 +430,40 @@ func extractExtraControlConfigurationFromTemplate(orderedTemplate *orderedmap.Or
 	return controlConfig
 }
 
-// postProcessJsonOutputToCorrectEncodingAndFormatting 修复 JSON 转义后的 HTML 字符并美化数组排版
-func postProcessJsonOutputToCorrectEncodingAndFormatting(jsonInput string) string {
-	htmlCharacterReplacer := strings.NewReplacer("\\u0026", "&", "\\u003c", "<", "\\u003e", ">")
-	arrayCompactRegex := regexp.MustCompile(`\[\s+([^\[\]\n]+)\s+\]`)
-	
-	unescapedJson := htmlCharacterReplacer.Replace(jsonInput)
-	return arrayCompactRegex.ReplaceAllString(unescapedJson, `[$1]`)
-}
+const maximumSubscriptionResponseBodySizeInBytes = 16 << 20
 
-func downloadRawContentFromRemoteUrl(targetUrl string) string {
-	httpClientResponse, requestError := http.Get(targetUrl)
-	if requestError != nil { return "" }
+var subscriptionDownloadHttpClient = &http.Client{Timeout: 30 * time.Second}
+
+// 下载错误使用固定提示，避免原始 HTTP 错误泄露订阅地址中的令牌。
+func downloadRawContentFromRemoteUrl(targetUrl string) (string, error) {
+	httpClientResponse, requestError := subscriptionDownloadHttpClient.Get(targetUrl)
+	if requestError != nil {
+		return "", errors.New("订阅请求失败（网络错误或超时）")
+	}
 	defer httpClientResponse.Body.Close()
-	
-	responseBodyBytes, _ := io.ReadAll(httpClientResponse.Body)
-	return string(responseBodyBytes)
+	if httpClientResponse.StatusCode < 200 || httpClientResponse.StatusCode >= 300 {
+		return "", fmt.Errorf("订阅服务器返回 HTTP %d", httpClientResponse.StatusCode)
+	}
+	responseBodyBytes, readError := io.ReadAll(io.LimitReader(httpClientResponse.Body, maximumSubscriptionResponseBodySizeInBytes+1))
+	if readError != nil {
+		return "", errors.New("订阅正文读取失败")
+	}
+	if len(responseBodyBytes) > maximumSubscriptionResponseBodySizeInBytes {
+		return "", errors.New("订阅正文超过 16 MiB 限制")
+	}
+	content := strings.TrimSpace(strings.TrimPrefix(string(responseBodyBytes), "\ufeff"))
+	if content == "" {
+		return "", errors.New("订阅正文为空")
+	}
+	return content, nil
 }
 
 func checkIfCommandLineFlagWasExplicitlyProvided(flagName string) bool {
 	wasProvided := false
-	flag.Visit(func(f *flag.Flag) { 
-		if f.Name == flagName { wasProvided = true } 
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == flagName {
+			wasProvided = true
+		}
 	})
 	return wasProvided
 }

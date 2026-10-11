@@ -32,7 +32,7 @@ all: build
 build:
 	@echo "Building local developer version: $(DEV_VERSION)"
 	@mkdir -p $(BIN_DIR)
-	$(GO_BUILD_VARS) go build $(GO_BUILD_FLAGS) -ldflags="$(LDFLAGS_DEV)" -o $(BIN_DIR)/$(BINARY_NAME) main.go
+	$(GO_BUILD_VARS) go build $(GO_BUILD_FLAGS) -ldflags="$(LDFLAGS_DEV)" -o $(BIN_DIR)/$(BINARY_NAME) .
 	@echo "Build complete: ./$(BIN_DIR)/$(BINARY_NAME)"
 
 ## run: 构建并运行

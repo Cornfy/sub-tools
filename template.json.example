@@ -138,6 +138,9 @@
     {
       "tag": "Default-HTTP-Client",
       "detour": "⚙️ 默认"
+    },
+    {
+      "tag": "RuleSet-HTTP-Client"
     }
   ],
   "inbounds": [
@@ -248,119 +251,136 @@
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/private.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       },
       {
         "tag": "GeoIP-Private",
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/private.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       },
       {
         "tag": "GeoSite-CN",
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/cn.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       },
       {
         "tag": "GeoIP-CN",
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/cn.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       },
       {
         "tag": "GeoSite-GeoLocation-!CN",
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/geolocation-!cn.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       },
       {
         "tag": "Ad-Block",
         "type": "remote",
         "url": "https://gcore.jsdelivr.net/gh/217heidai/adblockfilters@main/rules/adblocksingbox.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       },
       {
         "tag": "GeoSite-Category-Games-CN",
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/category-games-cn.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       },
       {
         "tag": "GeoSite-Category-Games-!CN",
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/category-games-!cn.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       },
       {
         "tag": "GeoSite-Category-AI-!CN",
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/category-ai-!cn.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       },
       {
         "tag": "GeoSite-Google",
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/google.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       },
       {
         "tag": "GeoIP-Google",
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/google.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       },
       {
         "tag": "GeoSite-Apple",
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/apple.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       },
       {
         "tag": "GeoSite-Microsoft",
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/microsoft.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       },
       {
         "tag": "GeoSite-Telegram",
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/telegram.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       },
       {
         "tag": "GeoIP-Telegram",
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/telegram.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       },
       {
         "tag": "GeoSite-Twitter",
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/twitter.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       },
       {
         "tag": "GeoSite-Pixiv",
         "type": "remote",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/pixiv.srs",
         "format": "binary",
-        "update_interval": "24h"
+        "update_interval": "24h",
+        "http_client": "RuleSet-HTTP-Client"
       }
     ],
     "rules": [
